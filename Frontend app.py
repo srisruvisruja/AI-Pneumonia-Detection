@@ -2,21 +2,19 @@
 # Presentation tab: side arrow navigation, white text, and BACKGROUNDS behind radio + sliders
 
 import os, io, re, base64, typing as t
-import numpy as np
-import streamlit as st
-import tensorflow as tf
-import requests
-from PIL import Image, ImageFilter
+from pathlib import Path
 from urllib.parse import quote
 
-from tensorflow.keras.models import load_model
-from tensorflow.keras.layers import Conv2D, SeparableConv2D, DepthwiseConv2D
-from tensorflow.keras.applications.vgg16 import preprocess_input as vgg16_pre
-import os
-from pathlib import Path
+import numpy as np
 import requests
 import streamlit as st
 import tensorflow as tf
+from PIL import Image, ImageFilter
+
+# If you ever need raw Keras loader, alias it to avoid name clash with our funcs
+from tensorflow.keras.models import load_model as keras_load_model
+from tensorflow.keras.layers import Conv2D, SeparableConv2D, DepthwiseConv2D
+from tensorflow.keras.applications.vgg16 import preprocess_input as vgg16_pre
 
 # ===================== PROJECT IDENTITY =====================
 UNIVERSITY_NAME = "University of Hertfordshire"
@@ -25,54 +23,30 @@ AUTHOR_NAME     = "Srujan Demaiah Srinivasa"
 CANDIDATE_ID    = "Student ID: 22099746"
 SUPERVISOR_NAME = "Supervisor: Anish Saini"
 
-# ===================== MODEL / DATA CONFIG =====================
-#UNIFIED_MODEL_PATH = r"Frontend/Ensemble.h5"
-import os
-from pathlib import Path
-import requests
-import streamlit as st
-import tensorflow as tf
-
-# 1) Use your GitHub release download URL
-MODEL_URL = "https://github.com/srisruvisruja/AI-Pneumonia-Detection/releases/download/v1.0/Ensemble.h5"
-
-# 2) Define local path
+# ===================== PATHS / MODEL CONFIG =====================
 BASE_DIR = Path(__file__).resolve().parent
+
+# Try both locations for your assets (root and Frontend/)
+PRESENTATION_DIR_CANDIDATES = [
+    BASE_DIR / "Presentation Images",
+    BASE_DIR / "Frontend" / "Presentation Images",
+]
+LOGO_LOCAL_CANDIDATES = [
+    BASE_DIR / "UH_logo.PNG",
+    BASE_DIR / "Frontend" / "UH_logo.PNG",
+]
+
+# GitHub Release asset (direct download)
+MODEL_URL = "https://github.com/srisruvisruja/AI-Pneumonia-Detection/releases/download/v1.0/Ensemble.h5"
 MODEL_DIR = BASE_DIR / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_LOCAL = MODEL_DIR / "Ensemble.h5"
-
-def _download(url: str, dest: Path):
-    with requests.get(url, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1_048_576):  # 1 MB chunks
-                if chunk:
-                    f.write(chunk)
-
-@st.cache_resource(show_spinner=True)
-def load_model():
-    # download if missing or suspiciously small
-    if not MODEL_LOCAL.exists() or MODEL_LOCAL.stat().st_size < 5_000_000:
-        with st.spinner("Downloading model..."):
-            _download(MODEL_URL, MODEL_LOCAL)
-    model = tf.keras.models.load_model(str(MODEL_LOCAL), compile=False)
-    return model
-
-# Optional diagnostics
-st.sidebar.write("TensorFlow version:", tf.__version__)
-st.sidebar.write("Model path:", MODEL_LOCAL)
-st.sidebar.write("Exists?", MODEL_LOCAL.exists())
-st.sidebar.write("Size (MB):", round(MODEL_LOCAL.stat().st_size / 1e6, 2) if MODEL_LOCAL.exists() else "N/A")
-
+UNIFIED_MODEL_PATH = str(MODEL_LOCAL)  # backward-compatible alias used elsewhere in code
 
 CLASS_NAMES = ["BACTERIAL PNEUMONIA", "NORMAL", "VIRAL PNEUMONIA"]
 CLASS_COLORS = {"BACTERIAL PNEUMONIA": "#ef4444", "NORMAL": "#10b981", "VIRAL PNEUMONIA": "#6366f1"}
 IMG_SIZE = 224
 PREFERRED_LAST_CONV = "block5_conv3"
-
-# Default presentation image folder (used automatically; no uploader UI)
-PRESENTATION_IMAGE_DIR = r"/Frontend/Presentation Images"
 
 # ===================== BACKGROUND & LOGO SOURCES =====================
 def _svg_data_uri(svg: str) -> str:
@@ -88,10 +62,8 @@ BG_PER_CLASS = {"BACTERIAL PNEUMONIA": SVG_BG_BACTERIA, "VIRAL PNEUMONIA": SVG_B
 BG_NEUTRAL = "https://images.unsplash.com/photo-1586773860418-d37222d8fce3?q=80&w=1920&auto=format&fit=crop"
 
 LOGO_URLS = [
-    r"/Frontend/UH_logo.PNG",
     "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/University_of_Hertfordshire_logo.svg/512px-University_of_Hertfordshire_logo.svg.png",
 ]
-LOGO_LOCAL = r"/Frontend/UH_logo.PNG"
 
 # ===================== PAGE CONFIG =====================
 st.set_page_config(page_title="Pneumonia Classifier • UH", page_icon="🫁", layout="wide")
@@ -121,7 +93,7 @@ def _read_bytes_from_source(url_or_path: str) -> t.Optional[bytes]:
 def _guess_mime_from_bytes(b: bytes) -> str:
     if b[:8].startswith(b"\x89PNG"): return "image/png"
     if b[:3] == b"\xff\xd8\xff":     return "image/jpeg"
-    if b[:6] in (b"GIF87a", "GIF89a"): return "image/gif"
+    if b[:6] in (b"GIF87a", b"GIF89a"): return "image/gif"
     return "image/png"
 
 def embed_image_data_uri(candidates: list[str], local_path: str = "") -> str:
@@ -144,6 +116,28 @@ def hex_to_rgba(hex_color: str, alpha: float = 0.55) -> str:
     h = hex_color.lstrip("#")
     r, g, b = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
     return f"rgba({r},{g},{b},{alpha})"
+
+# ===================== MODEL DOWNLOADER / LOADER =====================
+def _download(url: str, dest: Path):
+    with requests.get(url, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1_048_576):  # 1 MB chunks
+                if chunk: f.write(chunk)
+
+@st.cache_resource(show_spinner=True)
+def get_unified_model():
+    # download if missing or suspiciously small (avoid LFS pointers)
+    if not MODEL_LOCAL.exists() or MODEL_LOCAL.stat().st_size < 5_000_000:
+        _download(MODEL_URL, MODEL_LOCAL)
+    model = tf.keras.models.load_model(str(MODEL_LOCAL), compile=False)
+    return model
+
+# Optional diagnostics
+st.sidebar.write("TensorFlow version:", tf.__version__)
+st.sidebar.write("Model path:", MODEL_LOCAL)
+st.sidebar.write("Exists?", MODEL_LOCAL.exists())
+st.sidebar.write("Size (MB):", round(MODEL_LOCAL.stat().st_size / 1e6, 2) if MODEL_LOCAL.exists() else "N/A")
 
 # ===================== GLOBAL CSS (background + components) =====================
 def build_bg_css_data_uri(url: str, local_path: str = "", animate: bool = True) -> str:
@@ -230,7 +224,6 @@ def build_bg_css_data_uri(url: str, local_path: str = "", animate: bool = True) 
   .slide-img h3 {{ margin:.2rem 0 .4rem 0; font-size:1.15rem; font-weight:900; }}
   .slide-toolbar {{ background: rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.25); display:flex; align-items:center; justify-content:space-between; gap:.6rem; padding:.5rem .8rem; border-radius:12px; }}
 
-  /* Side nav buttons — SQUIRCLE style */
   .img-nav-col .stButton>button {{
     width:94px; height:70px; border-radius:22px;
     background:linear-gradient(180deg, rgba(255,255,255,.2), rgba(0,0,0,.6));
@@ -241,7 +234,6 @@ def build_bg_css_data_uri(url: str, local_path: str = "", animate: bool = True) 
   .img-nav-col .stButton>button:hover {{ transform: scale(1.04); }}
   .img-nav-col {{ display:flex; align-items:center; justify-content:center; }}
 
-  /* >>> NEW: Ensure RADIO + SLIDER have readable BACKGROUNDS & white text */
   .presentation-scope div[role="radiogroup"] {{
     background: rgba(0,0,0,.55);
     border: 1px solid rgba(255,255,255,.25);
@@ -289,7 +281,6 @@ A comparative study was conducted using eight state-of-the-art convolutional neu
 The results highlight that while single models such as DenseNet201 and Xception achieved strong baseline performance, two-model ensembles delivered improved accuracy, and three-model ensembles offered more balanced trade-offs between sensitivity and specificity across bacterial and viral pneumonia subtypes. To ensure clinical relevance and interpretability, Grad-CAM visualization was applied to identify lung regions influencing predictions.
 Furthermore, a Streamlit-based web application was developed, enabling real-time classification of chest radiographs with integrated explainability features. This user-friendly interface provides clinicians and researchers with accessible AI support tools, bridging the gap between model development and clinical application.
 Overall, this study contributes to the growing body of work on medical AI by delivering a comprehensive cross-architecture comparison, demonstrating the efficacy of ensemble learning in pneumonia detection, and presenting an interpretable, deployable prototype system for clinical decision support.
-
 """
 
 CH1 = """Introduction
@@ -322,18 +313,15 @@ In the app. Users can upload one or more X-rays, view class probabilities, and t
 """
 
 # ===================== HEADER / BANNER + NAV =====================
-def embed_image_data_uri(candidates: list[str], local_path: str = "") -> str:
-    b = _read_bytes_from_source(local_path)
-    if not b:
-        for u in candidates:
-            b = _read_bytes_from_source(u)
-            if b: break
-    if not b: return ""
-    mime = _guess_mime_from_bytes(b)
-    return f"data:{mime};base64,{base64.b64encode(b).decode('utf-8')}"
-
 def render_header():
-    logo_data_uri = embed_image_data_uri(LOGO_URLS, LOGO_LOCAL)
+    # Resolve logo local path (first that exists)
+    logo_local = ""
+    for p in LOGO_LOCAL_CANDIDATES:
+        if p.exists():
+            logo_local = str(p)
+            break
+
+    logo_data_uri = embed_image_data_uri(LOGO_URLS, logo_local)
     col_logo, col_text = st.columns([1, 3])
     with col_logo:
         st.markdown(f"""
@@ -370,12 +358,7 @@ def render_header():
 
 render_header()
 
-# ===================== CACHED LOADERS & HELPERS =====================
-@st.cache_resource(show_spinner=False)
-def load_model_safe(path: str):
-    if not os.path.exists(path): raise FileNotFoundError(f"Model file not found: {path}")
-    return load_model(path)
-
+# ===================== CACHED HELPERS =====================
 @st.cache_data(show_spinner=False)
 def preprocess_image(img_bytes: bytes, target_size=(224, 224)):
     im = Image.open(io.BytesIO(img_bytes)).convert("RGB").resize(target_size)
@@ -501,12 +484,14 @@ def _natural_key(s: str):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
 
 @st.cache_data(show_spinner=False)
-def get_presentation_images(dir_path: str) -> list[str]:
+def get_presentation_images() -> list[str]:
     exts = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
-    if not os.path.isdir(dir_path): return []
-    names = [n for n in os.listdir(dir_path) if os.path.splitext(n)[1].lower() in exts]
-    names.sort(key=_natural_key)
-    return [os.path.join(dir_path, n) for n in names]
+    for d in PRESENTATION_DIR_CANDIDATES:
+        if d.is_dir():
+            names = [n for n in os.listdir(d) if os.path.splitext(n)[1].lower() in exts]
+            names.sort(key=_natural_key)
+            return [str(d / n) for n in names]
+    return []
 
 # ===================== CLASSIFIER PAGE =====================
 def page_classifier():
@@ -526,14 +511,16 @@ def page_classifier():
         total = w_res + w_v19 + w_v16 or 1.0
         w_res, w_v19, w_v16 = [w/total for w in (w_res, w_v19, w_v16)]
 
-    if not files_main: return
+    if not files_main:
+        return
 
     try:
-        model = load_model_safe(UNIFIED_MODEL_PATH)
+        # Load unified model once (cached) and reuse for all choices
+        model = get_unified_model()
+        resnet_model = vgg16_model = vgg19_model = model
     except Exception as e:
         st.error(f"Unified model not available: {e}"); st.stop()
 
-    resnet_model = vgg16_model = vgg19_model = model
     n_cols = 2 if len(files_main)==1 else 3
     cols = st.columns(n_cols)
     top_preds = []
@@ -642,7 +629,8 @@ def page_presentation():
          "effect": None},
     ]
 
-    img_paths = get_presentation_images(PRESENTATION_IMAGE_DIR)
+    # Append images from folder (if present)
+    img_paths = get_presentation_images()
     for i, p in enumerate(img_paths, start=1):
         slides.append({"title": f"Image {i}", "img_path": p, "effect": None})
 
@@ -720,26 +708,4 @@ def page_presentation():
                 st.session_state.slide = min(total - 1, st.session_state.slide + 1)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)  # end presentation-scope
-
-# ===================== ROUTER =====================
-page = st.session_state.page
-if page == "app":
-    st.markdown(build_bg_css_data_uri(BG_NEUTRAL, "", animate=not disable_anim), unsafe_allow_html=True)
-    page_classifier()
-elif page == "about1":
-    st.markdown(build_bg_css_data_uri(BG_NEUTRAL, "", animate=not disable_anim), unsafe_allow_html=True)
-    page_about_intro()
-elif page == "about2":
-    st.markdown(build_bg_css_data_uri(BG_NEUTRAL, "", animate=not disable_anim), unsafe_allow_html=True)
-    page_specification()
-elif page == "deck":
-    st.markdown(build_bg_css_data_uri(BG_NEUTRAL, "", animate=not disable_anim), unsafe_allow_html=True)
-    page_presentation()
-
-# ===================== FOOTER =====================
-st.markdown("---")
-st.markdown(
-    "<div style='opacity:.95'>Made with <i class='bi bi-heart-fill text-danger'></i> by Srujan Demaiah Srinivasa under guidance of Anish Saini</div>",
-    unsafe_allow_html=True,
-)
+    st.markdown("</div>", unsafe_allow_html=True)  #
