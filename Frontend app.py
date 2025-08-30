@@ -12,6 +12,11 @@ from urllib.parse import quote
 from tensorflow.keras.models import load_model
 from tensorflow.keras.layers import Conv2D, SeparableConv2D, DepthwiseConv2D
 from tensorflow.keras.applications.vgg16 import preprocess_input as vgg16_pre
+import os
+from pathlib import Path
+import requests
+import streamlit as st
+import tensorflow as tf
 
 # ===================== PROJECT IDENTITY =====================
 UNIVERSITY_NAME = "University of Hertfordshire"
@@ -21,7 +26,45 @@ CANDIDATE_ID    = "Student ID: 22099746"
 SUPERVISOR_NAME = "Supervisor: Anish Saini"
 
 # ===================== MODEL / DATA CONFIG =====================
-UNIFIED_MODEL_PATH = r"Frontend/Ensemble.h5"
+#UNIFIED_MODEL_PATH = r"Frontend/Ensemble.h5"
+import os
+from pathlib import Path
+import requests
+import streamlit as st
+import tensorflow as tf
+
+# 1) Use your GitHub release download URL
+MODEL_URL = "https://github.com/srisruvisruja/AI-Pneumonia-Detection/releases/download/v1.0/Ensemble.h5"
+
+# 2) Define local path
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_DIR = BASE_DIR / "models"
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_LOCAL = MODEL_DIR / "Ensemble.h5"
+
+def _download(url: str, dest: Path):
+    with requests.get(url, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1_048_576):  # 1 MB chunks
+                if chunk:
+                    f.write(chunk)
+
+@st.cache_resource(show_spinner=True)
+def load_model():
+    # download if missing or suspiciously small
+    if not MODEL_LOCAL.exists() or MODEL_LOCAL.stat().st_size < 5_000_000:
+        with st.spinner("Downloading model..."):
+            _download(MODEL_URL, MODEL_LOCAL)
+    model = tf.keras.models.load_model(str(MODEL_LOCAL), compile=False)
+    return model
+
+# Optional diagnostics
+st.sidebar.write("TensorFlow version:", tf.__version__)
+st.sidebar.write("Model path:", MODEL_LOCAL)
+st.sidebar.write("Exists?", MODEL_LOCAL.exists())
+st.sidebar.write("Size (MB):", round(MODEL_LOCAL.stat().st_size / 1e6, 2) if MODEL_LOCAL.exists() else "N/A")
+
 
 CLASS_NAMES = ["BACTERIAL PNEUMONIA", "NORMAL", "VIRAL PNEUMONIA"]
 CLASS_COLORS = {"BACTERIAL PNEUMONIA": "#ef4444", "NORMAL": "#10b981", "VIRAL PNEUMONIA": "#6366f1"}
