@@ -224,12 +224,6 @@ def load_unified_model():
     model = tf.keras.models.load_model(str(MODEL_LOCAL), compile=False)
     return model
 
-# Diagnostics
-st.sidebar.markdown("### Diagnostics")
-st.sidebar.write("TensorFlow:", tf.__version__)
-st.sidebar.write("Model path:", str(MODEL_LOCAL))
-st.sidebar.write("Exists?", MODEL_LOCAL.exists())
-st.sidebar.write("Size (MB):", round(MODEL_LOCAL.stat().st_size/1e6, 2) if MODEL_LOCAL.exists() else "N/A")
 
 # ===================== CONTENT (TEXT) =====================
 ABSTRACT = (
